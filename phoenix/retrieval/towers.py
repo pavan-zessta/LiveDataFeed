@@ -1,30 +1,49 @@
-"""
-MODULE 3: Phoenix Retrieval — Two-Tower Model
-===============================================
-PyTorch model that encodes users and posts into the same embedding space.
+from __future__ import annotations
 
-TODO: Implement:
+import torch
+import torch.nn as nn
 
-1. UserTower(nn.Module)
-   - Input: user interest vector (10 floats) + engagement history features
-   - Architecture: Linear(input_dim, 128) → ReLU → Linear(128, embedding_dim)
-   - Output: user embedding [embedding_dim]
 
-2. CandidateTower(nn.Module)
-   - Input: post topic vector (10 floats) + post features (has_media, has_link, age...)
-   - Architecture: Linear(input_dim, 128) → ReLU → Linear(128, embedding_dim)
-   - Output: post embedding [embedding_dim]
+class UserTower(nn.Module):
+    def __init__(self, input_dim: int = 10, embedding_dim: int = 64):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, embedding_dim),
+        )
 
-3. TwoTowerModel(nn.Module)
-   - Combines UserTower + CandidateTower
-   - forward(user_features, post_features) → similarity score
-   - Similarity = dot product of the two embeddings
-   - Training: positive pairs (user engaged with post) score high,
-     negative pairs (random user-post) score low
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)  # [batch, embedding_dim]
 
-MATH RECAP:
-  user_emb  = UserTower(user_features)       # shape: [batch, 64]
-  post_emb  = CandidateTower(post_features)  # shape: [batch, 64]
-  score     = (user_emb * post_emb).sum(-1)  # dot product per pair
-  loss      = BCEWithLogitsLoss(score, label) # 1 if engaged, 0 if not
-"""
+
+class CandidateTower(nn.Module):
+    def __init__(self, input_dim: int = 13, embedding_dim: int = 64):
+        super().__init__()
+        # input: 10 topic floats + has_media + has_link + post_age_norm
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, embedding_dim),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)  # [batch, embedding_dim]
+
+
+class TwoTowerModel(nn.Module):
+    def __init__(self, user_input_dim: int = 10, post_input_dim: int = 13, embedding_dim: int = 64):
+        super().__init__()
+        self.user_tower = UserTower(user_input_dim, embedding_dim)
+        self.candidate_tower = CandidateTower(post_input_dim, embedding_dim)
+
+    def forward(self, user_features: torch.Tensor, post_features: torch.Tensor) -> torch.Tensor:
+        user_emb = self.user_tower(user_features)      # [batch, embedding_dim]
+        post_emb = self.candidate_tower(post_features)  # [batch, embedding_dim]
+        return (user_emb * post_emb).sum(-1)            # dot product → [batch]
+
+    def encode_user(self, user_features: torch.Tensor) -> torch.Tensor:
+        return self.user_tower(user_features)
+
+    def encode_post(self, post_features: torch.Tensor) -> torch.Tensor:
+        return self.candidate_tower(post_features)
