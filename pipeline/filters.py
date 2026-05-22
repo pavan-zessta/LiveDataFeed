@@ -1,39 +1,91 @@
-"""
-MODULE 5: Pre/Post Scoring Filters
-====================================
-Cheap checks that remove obviously ineligible posts before
-the expensive ML scoring step.
+from __future__ import annotations
 
-TODO: Implement these filter functions:
+from datetime import datetime, timedelta
 
-PRE-SCORING FILTERS (run before Phoenix Scorer):
+from data.models import ScoredCandidate
 
-1. filter_duplicates(candidates) -> list[ScoredCandidate]
-   → Remove posts with the same post_id
 
-2. filter_old_posts(candidates, max_age_hours=48) -> list
-   → Remove posts older than threshold
+def filter_duplicates(candidates: list[ScoredCandidate]) -> list[ScoredCandidate]:
+    seen: set[str] = set()
+    out: list[ScoredCandidate] = []
+    for c in candidates:
+        if c.post.post_id not in seen:
+            seen.add(c.post.post_id)
+            out.append(c)
+    return out
 
-3. filter_self_posts(candidates, user_id) -> list
-   → Remove posts authored by the requesting user
 
-4. filter_blocked_authors(candidates, blocked_ids) -> list
-   → Remove posts from blocked accounts
+def filter_old_posts(
+    candidates: list[ScoredCandidate],
+    max_age_hours: int = 48,
+) -> list[ScoredCandidate]:
+    cutoff = datetime.utcnow() - timedelta(hours=max_age_hours)
+    return [c for c in candidates if c.post.created_at >= cutoff]
 
-5. filter_muted_keywords(candidates, muted_keywords) -> list
-   → Remove posts containing any muted keyword (case-insensitive)
 
-6. filter_already_seen(candidates, seen_post_ids: set) -> list
-   → Remove posts the user has already been shown
+def filter_self_posts(
+    candidates: list[ScoredCandidate],
+    user_id: str,
+) -> list[ScoredCandidate]:
+    return [c for c in candidates if c.post.author_id != user_id]
 
-POST-SCORING FILTERS (run after scoring + selection):
 
-7. filter_author_diversity(candidates, max_per_author=3) -> list
-   → If more than max_per_author posts from same author made it
-     into the final set, keep only the top-scored ones
+def filter_blocked_authors(
+    candidates: list[ScoredCandidate],
+    blocked_ids: list[str],
+) -> list[ScoredCandidate]:
+    blocked = set(blocked_ids)
+    return [c for c in candidates if c.post.author_id not in blocked]
 
-DESIGN NOTE:
-  Filters are intentionally simple — no ML, just business logic.
-  They run in microseconds. The goal is to shrink the candidate set
-  before the expensive transformer inference.
-"""
+
+def filter_muted_keywords(
+    candidates: list[ScoredCandidate],
+    muted_keywords: list[str],
+) -> list[ScoredCandidate]:
+    if not muted_keywords:
+        return candidates
+    lowered = [kw.lower() for kw in muted_keywords]
+    return [
+        c for c in candidates
+        if not any(kw in c.post.text.lower() for kw in lowered)
+    ]
+
+
+def filter_already_seen(
+    candidates: list[ScoredCandidate],
+    seen_post_ids: set[str],
+) -> list[ScoredCandidate]:
+    return [c for c in candidates if c.post.post_id not in seen_post_ids]
+
+
+def filter_author_diversity(
+    candidates: list[ScoredCandidate],
+    max_per_author: int = 3,
+) -> list[ScoredCandidate]:
+    # Sort by score so we keep the best posts per author
+    sorted_candidates = sorted(candidates, key=lambda c: c.final_score, reverse=True)
+    author_count: dict[str, int] = {}
+    out: list[ScoredCandidate] = []
+    for c in sorted_candidates:
+        count = author_count.get(c.post.author_id, 0)
+        if count < max_per_author:
+            out.append(c)
+            author_count[c.post.author_id] = count + 1
+    return out
+
+
+def apply_pre_scoring_filters(
+    candidates: list[ScoredCandidate],
+    user_id: str,
+    blocked_ids: list[str],
+    muted_keywords: list[str],
+    seen_post_ids: set[str],
+    max_age_hours: int = 48,
+) -> list[ScoredCandidate]:
+    candidates = filter_duplicates(candidates)
+    candidates = filter_old_posts(candidates, max_age_hours)
+    candidates = filter_self_posts(candidates, user_id)
+    candidates = filter_blocked_authors(candidates, blocked_ids)
+    candidates = filter_muted_keywords(candidates, muted_keywords)
+    candidates = filter_already_seen(candidates, seen_post_ids)
+    return candidates
