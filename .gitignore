@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.env
+models/*.pt
+data/generated/
+node_modules/
+frontend/dist/
+.vscode/
+*.egg-info/
